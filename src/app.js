@@ -4024,6 +4024,11 @@ function executeLoadMenuData(forced = false) {
               masterMap.set(id, existing ? { ...existing, ...item } : item);
             });
             state.masterCampaignRegistry = Array.from(masterMap.values());
+            // Drop optimistic twins the server rows just confirmed: a temp-ID
+            // row and its server row share content but not Record ID, so the
+            // Map above keeps both — dedupe by display key keeps one, so a
+            // later render from the registry can never show the same SL twice.
+            state.masterCampaignRegistry = dedupeCampaignRows(state.masterCampaignRegistry);
             if ('requestIdleCallback' in window) {
               requestIdleCallback(() => {
                 try { localStorage.setItem('adverse_master_campaigns_v2', JSON.stringify(state.masterCampaignRegistry)); } catch (_) {}
@@ -4042,6 +4047,19 @@ function executeLoadMenuData(forced = false) {
         }
         state.filteredRecords = [...state.rawRecords];
         state.headers = recs.headers || res.headers || CH;
+        // Stable showing + speed (2026-11-01): a background (non-forced)
+        // refresh whose rows are identical to what's already on screen must
+        // not touch the DOM at all — the full innerHTML rebuild every ~25s
+        // is what made rows vanish/reappear and the table feel slow.
+        // Lists, cache and timestamps above still update; only the DOM
+        // rebuild, stats redraw and snapshot write are skipped. A forced
+        // refresh (user pressed Refresh) always renders.
+        const _isBgRefresh = !forced && (key === 'campaign' || key === 'today_created_campaign');
+        const _shownFp = (Array.isArray(state.currentRenderedRecords) && state.currentRenderedRecords.length > 0) ? campaignRowsFingerprint(state.currentRenderedRecords) : '';
+        if (_isBgRefresh && _shownFp && _shownFp === campaignRowsFingerprint(state.filteredRecords)) {
+          if (state._emptyRetry) delete state._emptyRetry[cacheKey];
+          return;
+        }
         renderRecordsTable({ headers: state.headers, rows: state.filteredRecords });
         if (res.stats) {
           if ((!res.stats.totalRecords || res.stats.totalRecords === 0) && incomingRows.length > 0) {
@@ -4302,6 +4320,42 @@ function renderPageSummaryFilterBar() {
   card.insertBefore(bar, wrap);
 }
 
+// Stable-table helpers (2026-11-01): stop the same-SL double row and the
+// vanish/reappear flicker.
+// A campaign's display identity: SL is unique per month tab, so
+// SL + page + account + type + budget + start + month + year identifies one
+// campaign — whether the row is still the optimistic twin (temp Record ID)
+// or already its server row (server Record ID). Twins therefore share one
+// key and can never render as two rows. Rows with no SL and no Record ID
+// carry no identity and are never collapsed.
+function campaignDisplayKey(r) {
+  const sl = String(r.SL || r['SL NO'] || r.sl_no || '').trim();
+  if (sl) {
+    return 'sl:' + [sl, r['Page Name'] || '', r['AD Account'] || '', r.Types || '', r.Budget || '', r.Start || r['Start Date'] || '', r['Month'] || r.month || '', r['Year'] || r.year || ''].map(v => String(v).trim()).join('|');
+  }
+  const rid = String(r['Record ID'] || r._recordId || '').trim();
+  return rid ? 'id:' + rid : null;
+}
+function dedupeCampaignRows(list) {
+  if (!Array.isArray(list)) return list;
+  const seen = new Map();
+  list.forEach((r, idx) => {
+    const k = campaignDisplayKey(r) || ('uniq:' + idx);
+    const prev = seen.get(k);
+    if (!prev) { seen.set(k, r); return; }
+    // Prefer the confirmed (non-optimistic) row over its optimistic twin.
+    if (prev._optimistic && !r._optimistic) seen.set(k, r);
+  });
+  return Array.from(seen.values());
+}
+// Order-insensitive fingerprint of a row set: same campaigns in any order
+// give the same fingerprint, so a background refresh can tell "nothing
+// changed" without touching the DOM.
+function campaignRowsFingerprint(list) {
+  if (!Array.isArray(list)) return '';
+  return list.map(r => [r['Record ID'] || r._recordId || '', r.SL || '', r['Page Name'] || '', r.Budget || '', r.End || '', r.Types || '', r.Day || '', r['Status'] || ''].map(v => String(v)).join('|')).sort().join('\n');
+}
+
 function renderRecordsTable(data) {
   const thead = document.getElementById('tableHead');
   const tbody = document.getElementById('tableBody');
@@ -4480,6 +4534,9 @@ function renderRecordsTable(data) {
   displayColumns = displayColumns.filter(h => String(h).trim().toLowerCase() !== 'action');
 
   let displayRecords = records;
+  // Last line of defense: the same campaign (optimistic twin + server row)
+  // must never show as two rows, whatever list fed the table.
+  if (isCampaignView) displayRecords = dedupeCampaignRows(displayRecords);
 
   if (counter) {
     if (isPageSummary) {
@@ -8937,7 +8994,14 @@ async function saveEntry() {
                   // batch in a different order than the optimistic rows,
                   // and index-only pairing can attach the wrong SL to a
                   // row (page/AD right, SL wrong in the copy).
-                  const conf = confirmedRecords.find(c => c && (String(c['Record ID'] || '') === String(opt['Record ID'] || '') || String(c._recordId || '') === String(opt._recordId || ''))) || confirmedRecords[optIdx] || confirmedRecords[0];
+                  const conf = confirmedRecords.find(c => c && (String(c['Record ID'] || '') === String(opt['Record ID'] || '') || String(c._recordId || '') === String(opt._recordId || '')))
+                    // Content match before index fallback: the server may return
+                    // its own Record ID and/or a different batch order, so the
+                    // temp-ID match above can miss and index pairing can attach
+                    // the wrong SL to a row. Same SL + page + account + type +
+                    // budget + start is the same campaign either way.
+                    || confirmedRecords.find(c => c && campaignDisplayKey(c) && campaignDisplayKey(c) === campaignDisplayKey(opt))
+                    || confirmedRecords[optIdx] || confirmedRecords[0];
                   if (!conf) return;
                   const idx = list.findIndex(r => r === opt || r['Record ID'] === opt['Record ID'] || r._recordId === opt._recordId);
                   if (idx >= 0) {
