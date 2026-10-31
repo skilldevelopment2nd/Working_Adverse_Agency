@@ -2042,8 +2042,30 @@ function showPinLogin(msg) {
     app.classList.add('hidden');
     app.style.display = 'none';
   }
-  const overlay = document.getElementById('pinLoginOverlay');
-  if (overlay) {
+  let overlay = document.getElementById('pinLoginOverlay');
+  if (!overlay) {
+    // Fallback (2026-11-01): a stale cached HTML without the login overlay
+    // used to leave a blank page on ?pin= links (main UI hidden, nothing to
+    // show). Build the overlay here so the login screen always appears,
+    // whatever HTML version the browser cached. IDs match the static card,
+    // so submitPinLogin / togglePinVisibility / hidePinLogin work unchanged.
+    overlay = document.createElement('div');
+    overlay.id = 'pinLoginOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(ellipse at 50% 20%, #1E1B4B 0%, #0F172A 100%);font-family:Inter,system-ui,sans-serif';
+    overlay.innerHTML = '<div style="width:100%;max-width:420px;background:var(--card, #FFFFFF);border-radius:24px;padding:36px 30px;box-shadow:0 30px 80px rgba(0,0,0,.65);text-align:center;position:relative;border:1px solid var(--bor, #E2E8F0)">'
+      + '<div style="width:56px;height:56px;border-radius:18px;background:linear-gradient(135deg,#4F46E5,#6366F1);display:inline-flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 10px 25px -4px rgba(99,102,241,.5);margin-bottom:14px"><span class="ms" style="font-size:30px">lock</span></div>'
+      + '<h2 style="margin:0;color:var(--txt, #0F172A);font-size:22px;font-weight:800;letter-spacing:-.02em">AdVerse Agency</h2>'
+      + '<p style="margin:6px 0 20px;color:var(--txt-muted, #64748B);font-size:13px;font-weight:500">Enter access PIN or password to unlock dashboard</p>'
+      + '<form onsubmit="event.preventDefault(); submitPinLogin();" style="margin:0">'
+      + '<div style="margin-bottom:14px;position:relative">'
+      + '<input id="pinLoginInput" type="password" inputmode="text" placeholder="PIN or Password" maxlength="32" autocomplete="off" style="width:100%;padding:14px 44px 14px 16px;border:2px solid var(--bor, #E2E8F0);border-radius:14px;font-size:20px;text-align:center;outline:none;letter-spacing:4px;font-weight:800;color:var(--txt, #0F172A);background:var(--input-bg, #FFFFFF);box-sizing:border-box">'
+      + '<button type="button" onclick="togglePinVisibility()" id="btnTogglePinVis" title="Show / Hide PIN" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--txt-muted, #64748B);cursor:pointer;padding:6px;display:flex;align-items:center"><span class="ms" id="pinVisIcon" style="font-size:20px">visibility</span></button>'
+      + '</div>'
+      + '<div id="pinLoginError" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:10px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);color:#EF4444;font-size:12.5px;font-weight:600"></div>'
+      + '<button id="pinLoginBtn" type="submit" style="width:100%;padding:14px;border:0;border-radius:14px;background:linear-gradient(135deg,#4F46E5,#6366F1);color:#fff;font-size:15px;font-weight:800;letter-spacing:.2px;cursor:pointer;box-shadow:0 8px 24px -4px rgba(99,102,241,.5);display:flex;align-items:center;justify-content:center;gap:6px"><span class="ms" style="font-size:19px">key</span> Unlock Dashboard</button>'
+      + '</form></div>';
+    document.body.appendChild(overlay);
+  } else {
     overlay.classList.remove('hidden');
     overlay.style.display = 'flex';
   }
