@@ -2725,7 +2725,7 @@ function loadAppData(retryCount = 0) {
         stats: {
           totalRecords: monthRows.length,
           totalBudget: monthRows.reduce((s, r) => s + (parseFloat(r['Budget'] || r.budget || 0) || 0), 0),
-          totalTaka: monthRows.reduce((s, r) => s + (parseFloat(r['Taka'] || r.taka || 0) || 0), 0)
+          totalTaka: sumBudgetTaka(monthRows).taka
         }
       };
       if ('requestIdleCallback' in window) {
@@ -3098,7 +3098,7 @@ function populateFilters() {
       renderRecordsTable({ headers: state.headers.length ? state.headers : CH, rows: state.filteredRecords });
 
       const sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(r['Budget'] || r.budget || 0) || 0), 0);
-      const sumTak = state.filteredRecords.reduce((s, r) => s + (parseFloat(r['Taka'] || r.taka || 0) || 0), 0);
+      const sumTak = sumBudgetTaka(state.filteredRecords).taka;
       renderStats({
         totalRecords: state.filteredRecords.length,
         totalBudget: sumBud,
@@ -3493,13 +3493,17 @@ function selectMenu(key) {
   // applies the Entry Date filter across all months.
   if (cached && key !== 'page_summery' && !(key === 'campaign' && state.filters.date)) {
     state._menuJustRenderedKey = key;
-    if (cached.stats) renderStats(cached.stats);
+    if (key === 'payment_due_tracker') {
+      const _payRowsSel = filterPaymentRowsBySelectedMonth((cached.records || {}).rows || []);
+      const _payStatsSel = computePaymentStats(_payRowsSel, cached.stats);
+      if (_payStatsSel) renderStats(_payStatsSel); else if (cached.stats) renderStats(cached.stats);
+    } else if (cached.stats) renderStats(cached.stats);
     if (key === 'end_ads') {
       renderEndAdsTables(cached.records || cached);
     } else if (key === 'agency_spending') {
       renderAgencyCalculationView(cached.stats || cached.records);
     } else if (key === 'payment_due_tracker' && cached.records) {
-      renderPaymentHistoryTable({ ...cached.records, rows: filterPaymentRowsBySelectedMonth(cached.records.rows) }, cached.stats);
+      renderPaymentHistoryTable({ ...cached.records, rows: filterPaymentRowsBySelectedMonth(cached.records.rows) }, computePaymentStats(filterPaymentRowsBySelectedMonth(cached.records.rows), cached.stats) || cached.stats);
     } else if (cached.records) {
       state.rawRecords = (cached.records.rows || []).filter(r => isValidClientRow(r, key));
       state.rawRecords.forEach(r => {
@@ -3555,7 +3559,7 @@ function selectMenu(key) {
       renderRecordsTable({ headers: state.headers.length ? state.headers : CH, rows: state.filteredRecords });
 
       const sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(r['Budget'] || r.budget || 0) || 0), 0);
-      const sumTak = state.filteredRecords.reduce((s, r) => s + (parseFloat(r['Taka'] || r.taka || 0) || 0), 0);
+      const sumTak = sumBudgetTaka(state.filteredRecords).taka;
       renderStats({
         totalRecords: state.filteredRecords.length,
         totalBudget: sumBud,
@@ -3593,7 +3597,7 @@ function selectMenu(key) {
         if (!pMap[p]) pMap[p] = { 'Page Name': p, 'Total Ads': 0, 'Total Budget $': 0, 'Total Taka': 0 };
         pMap[p]['Total Ads'] += 1;
         pMap[p]['Total Budget $'] += parseFloat(c['Budget'] || c.budget || 0) || 0;
-        pMap[p]['Total Taka'] += parseFloat(String(c['Taka'] || c.taka || 0).replace(/[^0-9.]/g, '')) || 0;
+        pMap[p]['Total Taka'] += takaOfRow(c);
         // Latest-status classification (same rule as the server): each page
         // counts once, under its latest campaign's status, so New + Old
         // always equals Active — never the old double-count. The latest
@@ -3949,7 +3953,7 @@ function executeLoadMenuData(forced = false) {
       renderStats({
         totalRecords: state.rawRecords.length,
         totalBudget: state.rawRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0),
-        totalTaka: state.rawRecords.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || '0').replace(/[^0-9.]/g, '')) || 0), 0)
+        totalTaka: sumBudgetTaka(state.rawRecords).taka
       });
       hasActualData = true;
     }
@@ -3965,7 +3969,7 @@ function executeLoadMenuData(forced = false) {
         return;
       }
     }
-    if (cached.stats) renderStats(cached.stats);
+    if (key !== 'payment_due_tracker' && cached.stats) renderStats(cached.stats);
     if (key === 'end_ads' && cached.records) {
       renderEndAdsTables(cached.records);
       const todayCount = (cached.records.today || []).length;
@@ -3977,7 +3981,9 @@ function executeLoadMenuData(forced = false) {
       hasActualData = !!(cached.stats && (cached.stats.totalCampaign > 0 || cached.stats.totalBudget > 0 || cached.stats.totalTaka > 0));
     } else if (key === 'payment_due_tracker' && cached.records) {
       const _payRows = filterPaymentRowsBySelectedMonth(cached.records.rows);
-      renderPaymentHistoryTable({ ...cached.records, rows: _payRows }, cached.stats);
+      const _payStatsC = computePaymentStats(_payRows, cached.stats);
+      if (_payStatsC) renderStats(_payStatsC);
+      renderPaymentHistoryTable({ ...cached.records, rows: _payRows }, _payStatsC || cached.stats);
       hasActualData = _payRows.length > 0;
     } else if (cached.records) {
       state.currentRecordsMenuKey = key;
@@ -4054,8 +4060,10 @@ function executeLoadMenuData(forced = false) {
         renderAgencyCalculationView(res.stats || res.records);
         saveLocalAppSnapshot();
       } else if (key === 'payment_due_tracker' && res.records) {
-        if (res.stats) renderStats(res.stats);
-        renderPaymentHistoryTable({ ...res.records, rows: filterPaymentRowsBySelectedMonth(res.records.rows) }, res.stats);
+        const _payRowsS = filterPaymentRowsBySelectedMonth(res.records.rows);
+        const _payStatsS = computePaymentStats(_payRowsS, res.stats);
+        if (_payStatsS) renderStats(_payStatsS); else if (res.stats) renderStats(res.stats);
+        renderPaymentHistoryTable({ ...res.records, rows: _payRowsS }, _payStatsS || res.stats);
         saveLocalAppSnapshot();
       } else if (res.records || res.rows) {
         state.currentRecordsMenuKey = key;
@@ -4124,14 +4132,14 @@ function executeLoadMenuData(forced = false) {
           if ((!res.stats.totalRecords || res.stats.totalRecords === 0) && incomingRows.length > 0) {
             res.stats.totalRecords = incomingRows.length;
             res.stats.totalBudget = incomingRows.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
-            res.stats.totalTaka = incomingRows.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+            res.stats.totalTaka = sumBudgetTaka(incomingRows).taka;
           }
           renderStats(res.stats);
         } else {
           renderStats({
             totalRecords: incomingRows.length,
             totalBudget: incomingRows.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0),
-            totalTaka: incomingRows.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || '0').replace(/[^0-9.]/g, '')) || 0), 0)
+            totalTaka: sumBudgetTaka(incomingRows).taka
           });
         }
         if (state._emptyRetry) delete state._emptyRetry[cacheKey];
@@ -4308,7 +4316,7 @@ function filterTableRows(query) {
       // No stat rewrite here.
     } else if (q) {
       const sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
-      const sumTak = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+      const sumTak = sumBudgetTaka(state.filteredRecords).taka;
       renderStats({
         totalRecords: state.filteredRecords.length,
         totalBudget: sumBud,
@@ -4316,7 +4324,7 @@ function filterTableRows(query) {
       });
     } else if (state.rawRecords && state.rawRecords.length > 0) {
       const sumBud = state.rawRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
-      const sumTak = state.rawRecords.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+      const sumTak = sumBudgetTaka(state.rawRecords).taka;
       renderStats({
         totalRecords: state.rawRecords.length,
         totalBudget: sumBud,
@@ -4398,6 +4406,75 @@ function renderPageSummaryFilterBar() {
 // or already its server row (server Record ID). Twins therefore share one
 // key and can never render as two rows. Rows with no SL and no Record ID
 // carry no identity and are never collapsed.
+// Taka rule (2026-11-02): Taka is ALWAYS Budget x Rate — never the stored
+// Taka column sum — so one wrong stored Taka (e.g. SL 11228) can never
+// corrupt any total again, in Today Created, All Campaign, Page Summary,
+// Agency Calculation or Payment. Row Rate falls back to 140 (the default).
+function takaOfRow(r) {
+  const b = parseFloat(String(r['Budget'] ?? r.budget ?? '0').replace(/[^0-9.]/g, '')) || 0;
+  const rt = parseFloat(String(r['Rate'] ?? r.rate ?? '').replace(/[^0-9.]/g, '')) || 140;
+  return Math.round(b * rt * 100) / 100;
+}
+function sumBudgetTaka(rows) {
+  let budget = 0, taka = 0;
+  (rows || []).forEach(r => {
+    budget += parseFloat(String(r['Budget'] ?? r.budget ?? '0').replace(/[^0-9.]/g, '')) || 0;
+    taka += takaOfRow(r);
+  });
+  return { budget: Math.round(budget * 100) / 100, taka: Math.round(taka * 100) / 100 };
+}
+// Payment cards (2026-11-02): never render cached/server stats as-is —
+// recompute from the SELECTED scope's campaigns (Budget x Rate) so the
+// cards can never show another month's numbers (e.g. November selected
+// but October's totals). Payments are filtered by the same scope.
+function scopedCampaignRowsForPayment() {
+  const list = (state.masterCampaignRegistry && state.masterCampaignRegistry.length > 0)
+    ? state.masterCampaignRegistry
+    : (state.campaignRegistry || []);
+  const mSel = (state.filters.month || '').trim();
+  const ySel = (state.filters.year || '').trim();
+  const yearOk = (r) => {
+    if (!ySel || ySel === 'All Years') return true;
+    const rY = String(r['Year'] || r.year || '').trim();
+    if (rY) return rY === ySel;
+    const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date'] || r['Entry Date']);
+    return dObj ? String(dObj.getFullYear()) === ySel : false;
+  };
+  if (!mSel || mSel === 'All' || mSel === 'All Months') return { rows: list.filter(yearOk), hasRegistry: list.length > 0 };
+  const mLow = mSel.toLowerCase();
+  const rows = list.filter(r => {
+    const rM = String(r['Month'] || r.month || '').trim().toLowerCase();
+    const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
+    const dateMonth = dObj ? MONTHS[dObj.getMonth()].toLowerCase() : '';
+    return (rM === mLow || rM.startsWith(mLow.slice(0, 3)) || dateMonth === mLow) && yearOk(r);
+  });
+  return { rows, hasRegistry: list.length > 0 };
+}
+function computePaymentStats(payRows, fallbackStats) {
+  const scoped = scopedCampaignRowsForPayment();
+  const rate = Number(state.rate) || 140;
+  if (scoped.hasRegistry) {
+    const bt = sumBudgetTaka(scoped.rows);
+    const paid = Math.round((payRows || []).reduce((sum, r) => {
+      const val = r['Paid (৳)'] !== undefined ? r['Paid (৳)']
+        : (r['paid_amount'] !== undefined ? r['paid_amount']
+        : (r['Paid'] !== undefined ? r['Paid']
+        : (r['paid'] !== undefined ? r['paid']
+        : (r['Amount'] !== undefined ? r['Amount'] : 0))));
+      return sum + (parseMoney(val) || 0);
+    }, 0) * 100) / 100;
+    return { success: true, totalBudget: bt.budget, totalBill: bt.taka, totalPaid: paid, totalDue: Math.round((bt.taka - paid) * 100) / 100, rate };
+  }
+  if (fallbackStats && (Number(fallbackStats.totalBudget) > 0 || Number(fallbackStats.totalBill) > 0)) {
+    const fr = Number(fallbackStats.rate) || rate;
+    const budget = Number(fallbackStats.totalBudget) || 0;
+    const bill = Math.round(budget * fr * 100) / 100;
+    const paid = Number(fallbackStats.totalPaid) || 0;
+    return { ...fallbackStats, totalBudget: budget, totalBill: bill, totalPaid: paid, totalDue: Math.round((bill - paid) * 100) / 100, rate: fr };
+  }
+  return fallbackStats || null;
+}
+
 function campaignDisplayKey(r) {
   const sl = String(r.SL || r['SL NO'] || r.sl_no || '').trim();
   if (sl) {
@@ -5025,7 +5102,7 @@ function renderRecordsTable(data) {
       const validRows = records.filter(r => isValidClientRow(r, currentKey));
       if (validRows.length > 0) {
         const sumBud = validRows.reduce((s, r) => s + (parseFloat(r['Budget'] || r.budget || 0) || 0), 0);
-        const sumTak = validRows.reduce((s, r) => s + (parseFloat(r['Taka'] || r.taka || 0) || 0), 0);
+        const sumTak = sumBudgetTaka(validRows).taka;
         
         const elEnt = document.getElementById('stat_tc_entries') || document.getElementById('stat_c_records');
         const elBud = document.getElementById('stat_tc_budget') || document.getElementById('stat_c_budget');
@@ -8982,7 +9059,7 @@ async function saveEntry() {
       if (curKey === 'today_created_campaign') {
         const todayItems = state.todayCreatedRegistry || [];
         const sumBud = todayItems.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || 0).replace(/[^0-9.]/g, '')) || 0), 0);
-        const sumTak = todayItems.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || 0).replace(/[^0-9.]/g, '')) || 0), 0);
+        const sumTak = sumBudgetTaka(todayItems).taka;
         renderStats({
           totalRecords: todayItems.length,
           totalBudget: sumBud,
@@ -8990,7 +9067,7 @@ async function saveEntry() {
         });
       } else if (curKey === 'campaign') {
         const sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || 0).replace(/[^0-9.]/g, '')) || 0), 0);
-        const sumTak = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Taka'] || r.taka || 0).replace(/[^0-9.]/g, '')) || 0), 0);
+        const sumTak = sumBudgetTaka(state.filteredRecords).taka;
         renderStats({
           totalRecords: state.filteredRecords.length,
           totalBudget: sumBud,

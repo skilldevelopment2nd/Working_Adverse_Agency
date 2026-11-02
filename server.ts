@@ -742,6 +742,16 @@ export function parseMoney(val: any): number {
   return isNaN(n) ? 0 : Math.round(n * 100) / 100;
 }
 
+// Taka rule (2026-11-02): Taka is ALWAYS Budget x Rate — never the stored
+// Taka column sum — so one wrong stored Taka (e.g. SL 11228) can never
+// corrupt any total again, in Today Created, All Campaign, Page Summary,
+// Agency Calculation or Payment. Row Rate falls back to 140 (the default).
+export function takaOfRow(r: any): number {
+  const b = Number(r['Budget']) || 0;
+  const rt = Number(r['Rate']) || 140;
+  return Math.round(b * rt * 100) / 100;
+}
+
 export function extractPaidAmount(r: any): number {
   if (!r) return 0;
   const val = r['Paid (৳)'] !== undefined && r['Paid (৳)'] !== null && r['Paid (৳)'] !== '' ? r['Paid (৳)']
@@ -3870,9 +3880,9 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
 
       const displayTodayRows = todayRows;
       const todayBudget = todayRows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0);
-      const todayTaka = todayRows.reduce((s, r) => s + (Number(r['Taka']) || 0), 0);
+      const todayTaka = todayRows.reduce((s, r) => s + takaOfRow(r), 0);
       const curMonthBudget = curMonthRows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0);
-      const curMonthTaka = curMonthRows.reduce((s, r) => s + (Number(r['Taka']) || 0), 0);
+      const curMonthTaka = curMonthRows.reduce((s, r) => s + takaOfRow(r), 0);
 
       // Page Summary
       const pageSumMap: { [p: string]: { page: string; ads: number; budget: number } } = {};
@@ -3960,7 +3970,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
             totalRecords: curMonthRows.length,
             currentMonthRecords: curMonthRows.length,
             totalBudget: curMonthRows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0),
-            totalTaka: curMonthRows.reduce((s, r) => s + (Number(r['Taka']) || 0), 0),
+            totalTaka: curMonthRows.reduce((s, r) => s + takaOfRow(r), 0),
             currentMonth: currentMn,
             currentYear: currentYr
           }
@@ -3986,7 +3996,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
           stats: {
             success: true,
             totalPaid: paymentRows.reduce((s, r) => s + extractPaidAmount(r), 0),
-            totalBill: curMonthRows.reduce((s, r) => s + (Number(r['Taka']) || 0), 0),
+            totalBill: curMonthRows.reduce((s, r) => s + takaOfRow(r), 0),
             totalBudget: curMonthRows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0),
             rate: memoryStore.settings?.rate || 140
           }
@@ -4000,7 +4010,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
             // 2026-10-28 (user rule): same as getAgencyCalculation — the
             // Agency total comes from the Payment formula (Budget x Rate),
             // not the Taka column sum, so it can never diverge from Payment.
-            totalTaka: Math.round(curMonthRows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0) * (memoryStore.settings?.rate || 140) * 100) / 100,
+            totalTaka: Math.round(curMonthRows.reduce((s, r) => s + takaOfRow(r), 0) * 100) / 100,
             totalCost: (memoryStore.agencyCosts || []).reduce((s, r) => s + (Number(r['Cost'] || r['cost'] || 0) || 0), 0),
             totalPayment: paymentRows.reduce((s, r) => s + extractPaidAmount(r), 0)
           }
@@ -4332,8 +4342,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
       const rows = await campaignRows(currentMn, currentYr);
       const totalBudget = rows.reduce((sum, r) => sum + extractBudgetAmount(r), 0);
       const rate = await getRate();
-      const totalTakaRaw = rows.reduce((sum, r) => sum + parseMoney(r['Taka']), 0);
-      const totalTaka = totalTakaRaw > 0 ? totalTakaRaw : Math.round(totalBudget * rate * 100) / 100;
+      const totalTaka = Math.round(rows.reduce((sum, r) => sum + takaOfRow(r), 0) * 100) / 100;
       const totalDue = Math.max(0, Math.round((totalTaka - totalPaid) * 100) / 100);
 
       return {
@@ -4740,11 +4749,11 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
         }
 
         const budget = todayList.reduce((s, r) => s + (parseFloat(r['Budget'] || r.budget || 0) || 0), 0);
-        const taka = todayList.reduce((s, r) => s + (parseFloat(r['Taka'] || r.taka || 0) || 0), 0);
+        const taka = todayList.reduce((s, r) => s + takaOfRow(r), 0);
         
         let monthCamps = (await campaignRows(mn, yr)).filter(isValidCampaignRow);
         const monthBudget = monthCamps.reduce((s, r) => s + (parseFloat(r['Budget'] || r.budget || 0) || 0), 0);
-        const monthTaka = monthCamps.reduce((s, r) => s + (parseFloat(r['Taka'] || r.taka || 0) || 0), 0);
+        const monthTaka = monthCamps.reduce((s, r) => s + takaOfRow(r), 0);
         const isTodayEmpty = todayList.length === 0;
 
         return {
@@ -4764,13 +4773,13 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
       if (k === 'campaign') {
         let rows = await campaignRows(mn, yr);
         const budget = rows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0);
-        const taka = rows.reduce((s, r) => s + (Number(r['Taka']) || 0), 0);
+        const taka = rows.reduce((s, r) => s + takaOfRow(r), 0);
         let dailyRecords = 0, dailyBudget = 0, dailyTaka = 0;
         if (dateStr) {
           const dailyRows = rows.filter(r => isSameDay(r['Start'] || r['Date'] || r['Entry Date'], dateStr));
           dailyRecords = dailyRows.length;
           dailyBudget = dailyRows.reduce((s, r) => s + (Number(r['Budget']) || 0), 0);
-          dailyTaka = dailyRows.reduce((s, r) => s + (Number(r['Taka']) || 0), 0);
+          dailyTaka = dailyRows.reduce((s, r) => s + takaOfRow(r), 0);
         }
         return {
           success: true,
@@ -4853,7 +4862,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
         const campaigns = (await campaignRows(mn, yr)).filter(isValidCampaignRow);
         const budget = Math.round(campaigns.reduce((s, r) => s + extractBudgetAmount(r), 0) * 100) / 100;
         const rate = await getRate();
-        const totalBill = Math.round((budget * rate) * 100) / 100;
+        const totalBill = Math.round(campaigns.reduce((sum, r) => sum + takaOfRow(r), 0) * 100) / 100;
         const totalDue = Math.round((totalBill - paid) * 100) / 100;
         return {
           success: true,
@@ -4927,13 +4936,13 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
       if (k === 'campaign') {
         const rows = (records && records.rows) ? records.rows : [];
         const budget = rows.reduce((s: number, r: any) => s + (Number(r['Budget']) || 0), 0);
-        const taka = rows.reduce((s: number, r: any) => s + (Number(r['Taka']) || 0), 0);
+        const taka = rows.reduce((s: number, r: any) => s + takaOfRow(r), 0);
         let dailyRecords = 0, dailyBudget = 0, dailyTaka = 0;
         if (f.date) {
           const dailyRows = rows.filter((r: any) => isSameDay(r['Start'] || r['Date'] || r['Entry Date'], f.date));
           dailyRecords = dailyRows.length;
           dailyBudget = dailyRows.reduce((s: number, r: any) => s + (Number(r['Budget']) || 0), 0);
-          dailyTaka = dailyRows.reduce((s: number, r: any) => s + (Number(r['Taka']) || 0), 0);
+          dailyTaka = dailyRows.reduce((s: number, r: any) => s + takaOfRow(r), 0);
         }
         stats = {
           success: true,
@@ -5985,7 +5994,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
 
       const totalCampaigns = uniqueCampaigns.length;
       const totalBudgetUSD = uniqueCampaigns.reduce((s, r) => s + (Number(r['Budget']) || 0), 0);
-      const totalTaka = uniqueCampaigns.reduce((s, r) => s + (Number(r['Taka']) || 0), 0);
+      const totalTaka = uniqueCampaigns.reduce((s, r) => s + takaOfRow(r), 0);
 
       const allPayments = memoryStore.payments;
       const totalPaid = allPayments.reduce((s, r) => s + (Number(r['Paid (৳)']) || 0), 0);
