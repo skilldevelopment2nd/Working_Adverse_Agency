@@ -8577,6 +8577,10 @@ function renderEntryForm() {
         pillPage.textContent = pName ? `${pName} (${pStatus})` : '—';
       }
 
+      // Extra rows inherit the main form's page (batch = one page) — keep
+      // their readonly page labels in sync so the kept page stays visible.
+      document.querySelectorAll('.multi-campaign-page').forEach(el => { el.value = pName; });
+
       const pillFin = document.getElementById('entryPillFin');
       if (pillFin) {
         const dailyStr = (day > 0 && budget > 0) ? ` ($${(budget / day).toFixed(1)}/d)` : '';
@@ -9112,13 +9116,17 @@ async function saveEntry() {
         // Per-campaign start date: use this row's own START field, falling
         // back to the main campaign's start date when it is left blank.
         const rowStart = row.querySelector('.multi-campaign-start')?.value || data.start_date;
+        // Per-item Taka (2026-11-03): always this row's own Budget x Rate —
+        // never the main row's Taka riding along (the ৳4,900-on-a-$5-row bug).
+        const rowTaka = (budget * rateVal).toFixed(2);
         batchItems.push({
           day,
           budget,
           start_date: rowStart,
           types: rowType,
           sl_no: rowSl || undefined,
-          record_id: 'temp_' + batchStamp + '_' + (rowIdx + 1)
+          record_id: 'temp_' + batchStamp + '_' + (rowIdx + 1),
+          taka: rowTaka
         });
       });
     }
@@ -9475,6 +9483,8 @@ function addMultipleCampaignRow() {
   const srcBud = prevRow ? prevRow.querySelector('.multi-campaign-budget')?.value : mainBudInput?.value;
   const srcStart = prevRow ? prevRow.querySelector('.multi-campaign-start')?.value : mainStartInput?.value;
   const srcType = prevRow ? prevRow.querySelector('.multi-campaign-type')?.value : mainTypeInput?.value;
+  const mainPageInput = document.getElementById('pageNameInput') || document.querySelector('#entryForm [name="page_name"]');
+  const initialPage = mainPageInput?.value || '';
   const initialDay = (srcDay && parseFloat(srcDay) > 0) ? srcDay : '2';
   const initialBud = (srcBud && parseFloat(srcBud) > 0) ? srcBud : '10';
   const initialStart = srcStart || '';
@@ -9497,6 +9507,11 @@ function addMultipleCampaignRow() {
     </div>
 
     <div class="multi-fields-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:10px;width:100%;align-items:start">
+      <div class="form-field">
+        <label>PAGE NAME</label>
+        <input type="text" class="multi-campaign-page" value="${escapeHtml(initialPage)}" readonly style="font-weight:700" title="Main form-er page — sob extra row-te eki page thake">
+      </div>
+
       <div class="form-field">
         <label>START <span class="req">*</span></label>
         <input type="date" class="multi-campaign-start" value="${initialStart}" required>

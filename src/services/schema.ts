@@ -439,13 +439,14 @@ export function normalizeCampaign(d: any, defaultMonth?: string, defaultYear?: s
   const parsedRate = parseFloat(rawRate);
   x['Rate'] = (!isNaN(parsedRate) && parsedRate > 0) ? parsedRate : 140;
 
-  // Strict Taka Validation: Always compute from Budget * Rate if empty, 0, or invalid
-  const rawTaka = String(d.taka ?? d.Taka ?? d['Total Taka'] ?? '').replace(/[^0-9.]/g, '');
-  const parsedTaka = parseFloat(rawTaka);
+  // Taka rule (2026-11-03, multi-campaign bug): Taka is ALWAYS Budget x Rate.
+  // Never trust a supplied Taka — in a batch save the main row's Taka used
+  // to ride along with every extra item (the client sends no per-item taka,
+  // so the merged {...main, ...item} still carried the main row's Taka),
+  // and this trust branch kept it: a $5 extra row inherited the $35 main
+  // row's ৳4,900. The supplied value is ignored entirely now.
   const calculatedTaka = Number(x['Budget']) * Number(x['Rate']);
-  x['Taka'] = (!isNaN(parsedTaka) && parsedTaka > 0)
-    ? parsedTaka.toFixed(2)
-    : (calculatedTaka > 0 ? calculatedTaka.toFixed(2) : (Number(x['Budget']) * 140).toFixed(2));
+  x['Taka'] = calculatedTaka > 0 ? calculatedTaka.toFixed(2) : (Number(x['Budget']) * 140).toFixed(2);
 
   x['Types'] = d.types || d.Types || x['Types'] || 'Boost';
   x['Status'] = d.status || d.Status || x['Status'] || 'Old Page';
