@@ -5545,6 +5545,17 @@ function renderPaymentHistoryTable(data, stats) {
   }
 }
 
+// All Clear button state (2026-11-02): green + full opacity only when the
+// month's due is exactly clear; otherwise muted with the remaining amount
+// in the tooltip. Clicking still validates and explains what is left.
+function refreshAllClearButton(remaining) {
+  const btn = document.getElementById('btnAllClearImage');
+  if (!btn) return;
+  const clear = Math.round((remaining || 0) * 100) / 100 === 0;
+  btn.style.opacity = clear ? '1' : '0.55';
+  btn.title = clear ? 'Due clear — All Clear image download koro' : `Due clear hoy nai — ekhono ৳${fmtNum(remaining || 0)} baki`;
+}
+
 function renderAgencyCalculationView(calcData) {
   const container = document.getElementById('agencyCalcContainer');
   if (!container) return;
@@ -5619,6 +5630,9 @@ function renderAgencyCalculationView(calcData) {
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button type="button" class="btn btn-primary" id="btnDownloadCalcImage" onclick="downloadCalculationImage()" style="font-size:12.5px;padding:7px 15px;gap:6px;font-weight:700;background:linear-gradient(135deg,#DC2626,#EF4444);border:none">
             <span class="ms" style="font-size:16px">photo_camera</span> Export Image
+          </button>
+          <button type="button" class="btn btn-primary" id="btnAllClearImage" onclick="downloadAllClearImage()" style="font-size:12.5px;padding:7px 15px;gap:6px;font-weight:700;background:linear-gradient(135deg,#059669,#10B981);border:none;color:#fff">
+            <span class="ms" style="font-size:16px">verified</span> All Clear Image
           </button>
         </div>
       </div>
@@ -5862,6 +5876,7 @@ function renderAgencyCalculationView(calcData) {
       </div>
     </div>
   `;
+  refreshAllClearButton(remainingDue);
 }
 
 window.recalcAgencyClosingStatement = function() {
@@ -5888,6 +5903,7 @@ window.recalcAgencyClosingStatement = function() {
   if (remainingDueEl) {
     remainingDueEl.textContent = `৳${fmtNum(remainingDue)}`;
   }
+  refreshAllClearButton(remainingDue);
 
   // Others Cost note: show it in the invoice footer section live
   const noteFooter = document.getElementById('calcOthersCostNoteFooter');
@@ -5995,6 +6011,119 @@ window.downloadCalculationImage = async function() {
       if (span) span.remove();
       if (input) input.style.display = '';
     });
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+};
+
+// All Clear certificate (2026-11-02): partner-ke dewar jonno premium
+// settlement image. Month name sobar age (first), tarpor ALL CLEAR stamp,
+// tarpor settlement figures. Sudhu tokhon-i download hobe jokhon Remaining
+// Due exactly 0 — na hole koto baki / overpaid ache seta toast-e janabe.
+window.downloadAllClearImage = async function() {
+  const d = state.currentStats || {};
+  const month = d.month || state.filters.month || 'September';
+  const year = d.year || state.filters.year || new Date().getFullYear();
+  const rate = d.rate || state.rate || 140;
+  const totalBudget = d.totalBudget || 0;
+  const totalTaka = d.totalTaka || (totalBudget * rate);
+  const totalPaid = d.totalPaid || 0;
+  const totalDue = d.totalDue !== undefined ? d.totalDue : (totalTaka - totalPaid);
+  const agencyAdsCost = d.agencyAdsCost || 0;
+  const othersCost = d.othersCost || 0;
+  const officeRent = d.officeRent || 0;
+  const finalDue = d.finalDue !== undefined ? d.finalDue : ((totalDue + agencyAdsCost + othersCost) - officeRent);
+  const finalPaid = d.finalPaid || 0;
+  const remainingDue = d.remainingDue !== undefined ? d.remainingDue : (finalDue - finalPaid);
+  const roundedRemaining = Math.round(remainingDue * 100) / 100;
+
+  if (roundedRemaining > 0) {
+    showToast(`Due clear hoy nai — ekhono ৳${fmtNum(roundedRemaining)} baki ache. Final Paid-e amount diye clear korle All Clear image download korte parbe.`, 'warning');
+    return;
+  }
+  if (roundedRemaining < 0) {
+    showToast(`Overpaid ache ৳${fmtNum(Math.abs(roundedRemaining))} — Final Paid ektu komale due exactly clear hobe, tarpor All Clear image pabe.`, 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('btnAllClearImage');
+  const originalHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="ms spin" style="font-size:16px">sync</span> Generating...';
+  }
+  const card = document.createElement('div');
+  card.id = 'allClearCertCard';
+  card.style.cssText = 'position:fixed;left:-12000px;top:0;width:920px;background:#ffffff;border-radius:20px;overflow:hidden;font-family:system-ui,-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;color:#0F172A;';
+  card.innerHTML = `
+    <div style="background:linear-gradient(135deg,#0B0F19 0%,#1E293B 100%);padding:24px 32px;color:#fff;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.08)">
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="width:52px;height:52px;border-radius:12px;background:#181D2A;border:1.5px solid rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;overflow:hidden">
+          <img src="/adverse-logo.svg" alt="AdVerse Agency" style="width:100%;height:100%;object-fit:cover" />
+        </div>
+        <div>
+          <div style="font-size:22px;font-weight:900;letter-spacing:-0.02em;color:#FFFFFF">AdVerse Agency</div>
+          <div style="font-size:11px;color:#94A3B8;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;margin-top:2px">Monthly Settlement Certificate</div>
+        </div>
+      </div>
+      <span style="display:inline-block;padding:5px 14px;background:rgba(16,185,129,0.2);color:#D1FAE5;font-weight:800;font-size:13.5px;border-radius:8px;border:1px solid rgba(16,185,129,0.35);letter-spacing:0.02em">SETTLED</span>
+    </div>
+    <div style="text-align:center;padding:36px 32px 8px">
+      <div style="font-size:12px;font-weight:800;color:#64748B;letter-spacing:0.22em;text-transform:uppercase">Settlement Month</div>
+      <div style="font-size:46px;font-weight:900;letter-spacing:-0.02em;margin-top:6px">${month} ${year}</div>
+    </div>
+    <div style="text-align:center;padding:14px 32px 26px">
+      <span style="display:inline-block;padding:12px 38px;border:3px solid #059669;color:#059669;border-radius:999px;font-size:28px;font-weight:900;letter-spacing:0.12em">\u2713 ALL CLEAR</span>
+      <div style="margin-top:16px;font-size:14px;color:#475569;font-weight:600">All dues for ${month} ${year} have been fully settled.</div>
+    </div>
+    <div style="margin:0 32px 24px;border:1px solid #E2E8F0;border-radius:14px;overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;text-align:left;font-size:14px">
+        <tr style="border-bottom:1px solid #F1F5F9">
+          <td style="padding:14px 22px;font-weight:700;color:#1E293B">Total Invoiced Bill</td>
+          <td style="padding:14px 22px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums">\u09f3${fmtNum(totalTaka)}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #F1F5F9">
+          <td style="padding:14px 22px;font-weight:700;color:#1E293B">Total Paid</td>
+          <td style="padding:14px 22px;text-align:right;font-weight:800;color:#10B981;font-variant-numeric:tabular-nums">\u09f3${fmtNum(totalPaid)}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #F1F5F9">
+          <td style="padding:14px 22px;font-weight:700;color:#1E293B">Final Due to Settle</td>
+          <td style="padding:14px 22px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums">\u09f3${fmtNum(finalDue)}</td>
+        </tr>
+        <tr style="border-bottom:1px solid #F1F5F9">
+          <td style="padding:14px 22px;font-weight:700;color:#065F46">Final Paid</td>
+          <td style="padding:14px 22px;text-align:right;font-weight:800;color:#065F46;font-variant-numeric:tabular-nums">\u09f3${fmtNum(finalPaid)}</td>
+        </tr>
+        <tr style="background:#F0FDF4">
+          <td style="padding:16px 22px;font-weight:900;color:#065F46">Remaining Due</td>
+          <td style="padding:16px 22px;text-align:right;font-weight:900;font-size:17px;color:#059669;font-variant-numeric:tabular-nums">\u09f30</td>
+        </tr>
+      </table>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#94A3B8;padding:0 32px 28px">
+      <span>Generated Date: ${formatCustomDate(getNowBST())} \u2022 Currency: BDT (\u09f3)</span>
+      <span>AdVerse Agency \u2022 Official Settlement</span>
+    </div>`;
+  document.body.appendChild(card);
+  try {
+    const h2c = (typeof window !== 'undefined' && window.html2canvas) ? window.html2canvas : (typeof html2canvas !== 'undefined' ? html2canvas : null);
+    if (!h2c) {
+      showToast('html2canvas library is loading, please try again in a moment.', 'warning');
+      return;
+    }
+    const canvas = await h2c(card, { scale: 3, useCORS: true, backgroundColor: '#ffffff', logging: false });
+    const link = document.createElement('a');
+    link.download = `AdVerse_Agency_All_Clear_${month}_${year}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    showToast(`\u2705 ${month} ${year} All Clear image download hoyeche!`, 'success');
+  } catch (err) {
+    console.error('All Clear image error:', err);
+    showToast('Failed to generate All Clear image.', 'error');
+  } finally {
+    card.remove();
     if (btn) {
       btn.disabled = false;
       btn.innerHTML = originalHtml;
