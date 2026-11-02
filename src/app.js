@@ -5576,9 +5576,13 @@ function renderAgencyCalculationView(calcData) {
   const othersCost = savedOverrides.othersCost !== undefined ? savedOverrides.othersCost : (d.othersCost || d.otherExpense || 0);
   const othersCostNote = savedOverrides.othersCostNote !== undefined ? savedOverrides.othersCostNote : (d.othersCostNote || '');
   const officeRent = savedOverrides.officeRent !== undefined ? savedOverrides.officeRent : (d.officeRent || 0);
+  const finalPaid = savedOverrides.finalPaid !== undefined ? savedOverrides.finalPaid : (d.finalPaid || 0);
 
   // Calculation formula: (Total Due + Agency Ads Cost + Others Cost) - Office Rent
   const finalDue = (totalDue + agencyAdsCost + othersCost) - officeRent;
+  // Final Paid (2026-11-02): amount paid against the final due — subtracted
+  // below, so the result (remaining due) is always visible.
+  const remainingDue = finalDue - finalPaid;
 
   state.currentStats = {
     ...d,
@@ -5592,6 +5596,8 @@ function renderAgencyCalculationView(calcData) {
     othersCostNote,
     officeRent,
     finalDue,
+    finalPaid,
+    remainingDue,
     month,
     year,
     rate
@@ -5780,6 +5786,25 @@ function renderAgencyCalculationView(calcData) {
                   </td>
                 </tr>
 
+                <!-- Final Paid (Clean Editable Input - SUBTRACTED / DEDUCTION) -->
+                <tr style="border-bottom:1px solid #E2E8F0;background:#F0FDF4">
+                  <td style="padding:12px 22px;font-weight:700;color:#065F46">
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <span style="color:#059669;display:flex;align-items:center">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      </span>
+                      <span>Final Paid</span>
+                      <span style="font-size:11px;color:#059669;font-weight:800">(-) Minus</span>
+                    </div>
+                  </td>
+                  <td style="padding:10px 22px;text-align:right">
+                    <div style="display:inline-flex;align-items:center;justify-content:flex-end">
+                      <span style="font-weight:800;color:#059669;font-size:13px;margin-right:6px">- ৳</span>
+                      <input type="number" step="any" id="calcFinalPaid" value="${finalPaid || ''}" placeholder="0" oninput="window.recalcAgencyClosingStatement()" style="width:140px;height:36px;padding:0 10px;text-align:right;font-weight:900;font-size:15px;color:#065F46;border:1px solid #A7F3D0;border-radius:8px;background:#ECFDF5;outline:none;transition:all 0.2s" onfocus="this.style.background='#fff';this.style.borderColor='#059669';this.style.boxShadow='0 0 0 3px rgba(5,150,105,0.12)'" onblur="this.style.background='#ECFDF5';this.style.borderColor='#A7F3D0';this.style.boxShadow='none'" />
+                    </div>
+                  </td>
+                </tr>
+
                 <!-- FINAL DUE TO SETTLE (Clean Grand Summary Row) -->
                 <tr style="background:#FFF5F5;border-top:2px solid #EF4444">
                   <td style="padding:18px 22px">
@@ -5796,6 +5821,26 @@ function renderAgencyCalculationView(calcData) {
                   <td style="padding:18px 22px;text-align:right">
                     <div id="calcFinalDueDisplay" style="font-weight:900;font-size:24px;color:#DC2626;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">
                       ৳${fmtNum(finalDue)}
+                    </div>
+                  </td>
+                </tr>
+
+                <!-- REMAINING DUE (Final Due to Settle minus Final Paid) -->
+                <tr style="background:#F0FDF4;border-top:2px solid #10B981">
+                  <td style="padding:18px 22px">
+                    <div style="font-weight:900;font-size:15px;color:#065F46;display:flex;align-items:center;gap:8px">
+                      <span style="color:#059669;display:flex;align-items:center">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      </span>
+                      <span>REMAINING DUE</span>
+                    </div>
+                    <div style="font-size:11.5px;color:#065F46;font-weight:500;margin-top:2px;margin-left:28px">
+                      (Final Due to Settle − Final Paid)
+                    </div>
+                  </td>
+                  <td style="padding:18px 22px;text-align:right">
+                    <div id="calcRemainingDueDisplay" style="font-weight:900;font-size:24px;color:#059669;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">
+                      ৳${fmtNum(remainingDue)}
                     </div>
                   </td>
                 </tr>
@@ -5828,14 +5873,20 @@ window.recalcAgencyClosingStatement = function() {
   const adsVal = parseFloat(document.getElementById('calcAgencyAdsCost')?.value) || 0;
   const othersVal = parseFloat(document.getElementById('calcOthersCost')?.value) || 0;
   const rentVal = parseFloat(document.getElementById('calcOfficeRent')?.value) || 0;
+  const finalPaidVal = parseFloat(document.getElementById('calcFinalPaid')?.value) || 0;
   const othersNoteVal = (document.getElementById('calcOthersCostNote')?.value || '').trim();
 
   // Formula: (Total Due + Agency Ads Cost + Others Cost) - Office Rent
   const finalDue = (totalDue + adsVal + othersVal) - rentVal;
+  const remainingDue = finalDue - finalPaidVal;
 
   const finalDueEl = document.getElementById('calcFinalDueDisplay');
   if (finalDueEl) {
     finalDueEl.textContent = `৳${fmtNum(finalDue)}`;
+  }
+  const remainingDueEl = document.getElementById('calcRemainingDueDisplay');
+  if (remainingDueEl) {
+    remainingDueEl.textContent = `৳${fmtNum(remainingDue)}`;
   }
 
   // Others Cost note: show it in the invoice footer section live
@@ -5851,7 +5902,9 @@ window.recalcAgencyClosingStatement = function() {
     othersCost: othersVal,
     othersCostNote: othersNoteVal,
     officeRent: rentVal,
-    finalDue: finalDue
+    finalDue: finalDue,
+    finalPaid: finalPaidVal,
+    remainingDue: remainingDue
   };
 
   // Persist manual inputs in localStorage for this month & year
@@ -5866,7 +5919,9 @@ window.recalcAgencyClosingStatement = function() {
       othersCost: othersVal,
       othersCostNote: othersNoteVal,
       officeRent: rentVal,
-      finalDue: finalDue
+      finalDue: finalDue,
+      finalPaid: finalPaidVal,
+      remainingDue: remainingDue
     };
     localStorage.setItem('adverse_closing_overrides', JSON.stringify(parsed));
   } catch (_) {}
@@ -5908,6 +5963,7 @@ window.downloadCalculationImage = async function() {
     swapInputForText('calcAgencyAdsCost', fmtAmt('calcAgencyAdsCost'), 'font-weight:800;font-size:15px;color:#0F172A;font-variant-numeric:tabular-nums');
     swapInputForText('calcOthersCost', fmtAmt('calcOthersCost'), 'font-weight:800;font-size:15px;color:#0F172A;font-variant-numeric:tabular-nums');
     swapInputForText('calcOfficeRent', `- ${fmtAmt('calcOfficeRent')}`, 'font-weight:900;font-size:15px;color:#C2410C;font-variant-numeric:tabular-nums');
+    swapInputForText('calcFinalPaid', `- ${fmtAmt('calcFinalPaid')}`, 'font-weight:900;font-size:15px;color:#065F46;font-variant-numeric:tabular-nums');
     // Note input: show its text in place on the invoice; hide it when empty
     const noteInput = document.getElementById('calcOthersCostNote');
     if (noteInput) {
@@ -5960,6 +6016,8 @@ window.copyAgencyMonthClosingStatement = function() {
   const othersCost = d.othersCost || 0;
   const officeRent = d.officeRent || 0;
   const finalDue = d.finalDue !== undefined ? d.finalDue : ((totalDue + agencyAdsCost + othersCost) - officeRent);
+  const finalPaid = d.finalPaid || 0;
+  const remainingDue = d.remainingDue !== undefined ? d.remainingDue : (finalDue - finalPaid);
 
   const text = `📊 AdVerse Agency - Monthly Financial Statement
 Period: ${ms} ${ys}
@@ -5975,8 +6033,10 @@ Period: ${ms} ${ys}
 • (+) Agency Ads Cost: ৳${fmtNum(agencyAdsCost)}
 • (+) Others Cost: ৳${fmtNum(othersCost)}
 • (-) Office Rent (Deduction): ৳${fmtNum(officeRent)}
+• (-) Final Paid: ৳${fmtNum(finalPaid)}
 ---------------------------------------------
-⭐ FINAL DUE TO SETTLE: ৳${fmtNum(finalDue)}`;
+⭐ FINAL DUE TO SETTLE: ৳${fmtNum(finalDue)}
+✅ REMAINING DUE: ৳${fmtNum(remainingDue)}`;
 
   copyCampaignRecord(text);
   showToast(`📋 ${ms} ${ys} Financial Statement copied to clipboard!`, 'success');
