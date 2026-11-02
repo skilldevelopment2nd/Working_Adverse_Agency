@@ -3460,7 +3460,14 @@ function selectMenu(key) {
 
   state.currentRecordsMenuKey = key;
 
-  if (cached) {
+  // Month-wise Page Summary (2026-11-02): page_summery never uses the
+  // server's running-month preload cache — it always builds client-side
+  // from the full registry with the SELECTED month filter below, so the
+  // New/Old list, counts and budgets follow the month pill / MONTH
+  // dropdown, and the filter bar (with Status/AD/ID/Last End) always
+  // renders. The registry build below is local and instant, so nothing
+  // is lost by skipping the cache for this one view.
+  if (cached && key !== 'page_summery') {
     state._menuJustRenderedKey = key;
     if (cached.stats) renderStats(cached.stats);
     if (key === 'end_ads') {
@@ -3526,9 +3533,32 @@ function selectMenu(key) {
         totalTaka: sumTak
       });
     } else if (key === 'page_summery') {
+      // Month-wise Page Summary (2026-11-02): aggregate ONLY the
+      // selected month's campaigns (same month/year match as the All
+      // Campaign view; All Months = sob row). A page's Status comes from
+      // its latest campaign WITHIN that month, so the New/Old filter,
+      // the stat cards and the filter bar are all month-wise.
+      const mFilter = state.filters.month ? state.filters.month.toLowerCase() : '';
+      const yFilter = state.filters.year ? String(state.filters.year) : '';
+      let monthRows = masterList;
+      if (mFilter && mFilter !== 'all' && mFilter !== 'all months') {
+        monthRows = masterList.filter(r => {
+          const rM = String(r['Month'] || r.month || '').toLowerCase();
+          const rY = String(r['Year'] || r.year || '');
+          const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
+          const dateMonth = dObj ? MONTHS[dObj.getMonth()].toLowerCase() : '';
+          return (rM === mFilter || rM.startsWith(mFilter.slice(0, 3)) || dateMonth === mFilter) && (!yFilter || rY === yFilter);
+        });
+      } else if (yFilter && yFilter !== 'all' && yFilter !== 'all years') {
+        monthRows = masterList.filter(r => {
+          const rY = String(r['Year'] || r.year || '');
+          const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
+          return (!yFilter || rY === yFilter || (dObj && String(dObj.getFullYear()) === yFilter));
+        });
+      }
       const pMap = {};
       const latestByPage = {};
-      masterList.forEach(c => {
+      monthRows.forEach(c => {
         const p = c['Page Name'] || c.page_name || '';
         if (!p) return;
         if (!pMap[p]) pMap[p] = { 'Page Name': p, 'Total Ads': 0, 'Total Budget $': 0, 'Total Taka': 0 };
@@ -3576,7 +3606,7 @@ function selectMenu(key) {
         totalRecords: pageList.length,
         totalPages: pageList.length,
         totalBudget: pageList.reduce((s, r) => s + r['Total Budget $'], 0),
-        totalAds: masterList.filter(c => (c['Page Name'] || c.page_name || '')).length,
+        totalAds: monthRows.filter(c => (c['Page Name'] || c.page_name || '')).length,
         newPages, newBudget, oldPages, oldBudget
       });
       renderPageSummaryFilterBar();
@@ -4283,6 +4313,9 @@ function clearTableSearch() {
 // campaign status. The filter lives on state so it survives search,
 // search-clear and table re-renders; the bar below the toolbar shows
 // the active filter with counts.
+// (2026-11-02, month-wise): the list it filters is built per selected
+// month, so switching the month pill / MONTH dropdown rebuilds the
+// list, counts and budgets for that month while the status filter stays.
 function applyPageSummaryFilterTo(list) {
   const f = state.pageSummaryFilter || 'all';
   if (f === 'new') return (list || []).filter(r => String(r['Status'] || '').toLowerCase().includes('new'));
@@ -4306,17 +4339,25 @@ function renderPageSummaryFilterBar() {
   const wrap = card ? card.querySelector('.table-wrap') : null;
   if (!card || !wrap) return;
   const all = state.pageSummaryAll || state.rawRecords || [];
-  const newCount = all.filter(r => String(r['Status'] || '').toLowerCase().includes('new')).length;
-  const oldCount = all.filter(r => String(r['Status'] || '').toLowerCase().includes('old')).length;
+  const isNew = r => String(r['Status'] || '').toLowerCase().includes('new');
+  const isOld = r => String(r['Status'] || '').toLowerCase().includes('old');
+  const newRows = all.filter(isNew);
+  const oldRows = all.filter(isOld);
+  const sumBud = list => list.reduce((s, r) => s + (parseFloat(r['Total Budget $'] || 0) || 0), 0);
+  // Month-wise label: this bar's list, counts and budgets all follow the
+  // selected month pill / MONTH dropdown (All Months = sob mas).
+  const monthLabel = (state.filters.month && state.filters.month !== 'All' && state.filters.month !== 'All Months')
+    ? `${state.filters.month} ${state.filters.year || ''}`.trim()
+    : 'All Months';
   const f = state.pageSummaryFilter || 'all';
-  const btn = (key, label, count) => {
+  const btn = (key, label, count, budget) => {
     const active = f === key;
-    return `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-secondary'}" onclick="setPageSummaryFilter('${key}')" style="height:32px;font-size:12.5px;padding:0 14px;font-weight:700">${label} (${count})</button>`;
+    return `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-secondary'}" onclick="setPageSummaryFilter('${key}')" style="height:32px;font-size:12.5px;padding:0 14px;font-weight:700">${label} (${count}) • $${fmtNum(budget)}</button>`;
   };
   const bar = document.createElement('div');
   bar.id = 'pageSummaryFilterBar';
   bar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 16px;border-bottom:1px solid var(--bor);';
-  bar.innerHTML = `<span style="font-weight:800;font-size:13px;">Filter:</span>${btn('all', 'All Pages', all.length)}${btn('new', 'New Pages', newCount)}${btn('old', 'Old Pages', oldCount)}<span style="font-size:11.5px;color:var(--txt-muted);margin-left:4px;">Status = page-er latest campaign onujayi</span>`;
+  bar.innerHTML = `<span style="font-weight:800;font-size:13px;">Filter (${monthLabel}):</span>${btn('all', 'All Pages', all.length, sumBud(all))}${btn('new', 'New Pages', newRows.length, sumBud(newRows))}${btn('old', 'Old Pages', oldRows.length, sumBud(oldRows))}<span style="font-size:11.5px;color:var(--txt-muted);margin-left:4px;">Status = oi month-er latest campaign onujayi • niche counter-e filtered page + budget dekhabe</span>`;
   card.insertBefore(bar, wrap);
 }
 
