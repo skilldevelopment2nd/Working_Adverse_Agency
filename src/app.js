@@ -3052,30 +3052,36 @@ function populateFilters() {
       const targetYear = state.filters.year ? String(state.filters.year).trim() : '';
       const targetDate = state.filters.date ? String(state.filters.date).trim() : '';
 
+      // Date-wise filter (2026-11-02): in All Campaign a picked date
+      // shows that day's entries (Entry Date — je din entry kora hoyeche)
+      // across ALL months. A date belongs to exactly one month, so the
+      // month/year pills must not hide that day's work. Without a date,
+      // the old month/year logic below applies unchanged.
       let locallyFiltered = sourceList;
-      if (targetMonth && targetMonth !== 'all' && targetMonth !== 'all months') {
-        locallyFiltered = locallyFiltered.filter(r => {
-          const rMonth = String(r['Month'] || r.month || '').trim().toLowerCase();
-          const rYear = String(r['Year'] || r.year || '').trim();
-          const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date'] || r['Entry Date']);
-          const dateMonth = dObj ? MONTHS[dObj.getMonth()].toLowerCase() : '';
-          const matchM = rMonth === targetMonth || rMonth.startsWith(targetMonth.slice(0, 3)) || dateMonth === targetMonth;
-          const matchY = !targetYear || rYear === targetYear || (dObj && String(dObj.getFullYear()) === targetYear);
-          return matchM && matchY;
-        });
-      } else if (targetYear && targetYear !== 'all' && targetYear !== 'all years') {
-        locallyFiltered = locallyFiltered.filter(r => {
-          const rYear = String(r['Year'] || r.year || '').trim();
-          const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
-          return rYear === targetYear || (dObj && String(dObj.getFullYear()) === targetYear);
-        });
-      }
+      if (targetDate && currentKey === 'campaign') {
+        locallyFiltered = locallyFiltered.filter(r => isSameDay(r['Entry Date'], targetDate));
+      } else {
+        if (targetMonth && targetMonth !== 'all' && targetMonth !== 'all months') {
+          locallyFiltered = locallyFiltered.filter(r => {
+            const rMonth = String(r['Month'] || r.month || '').trim().toLowerCase();
+            const rYear = String(r['Year'] || r.year || '').trim();
+            const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date'] || r['Entry Date']);
+            const dateMonth = dObj ? MONTHS[dObj.getMonth()].toLowerCase() : '';
+            const matchM = rMonth === targetMonth || rMonth.startsWith(targetMonth.slice(0, 3)) || dateMonth === targetMonth;
+            const matchY = !targetYear || rYear === targetYear || (dObj && String(dObj.getFullYear()) === targetYear);
+            return matchM && matchY;
+          });
+        } else if (targetYear && targetYear !== 'all' && targetYear !== 'all years') {
+          locallyFiltered = locallyFiltered.filter(r => {
+            const rYear = String(r['Year'] || r.year || '').trim();
+            const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
+            return rYear === targetYear || (dObj && String(dObj.getFullYear()) === targetYear);
+          });
+        }
 
-      if (targetDate) {
-        if (state.currentMenu && state.currentMenu.key === 'today_created_campaign') {
+        if (targetDate) {
+          // Only Today Created reaches here; it always means Entry Date.
           locallyFiltered = locallyFiltered.filter(r => isSameDay(r['Entry Date'], targetDate));
-        } else {
-          locallyFiltered = locallyFiltered.filter(r => isSameDay(r['Start'] || r['Start Date'] || r['Date'], targetDate));
         }
       }
 
@@ -3196,6 +3202,12 @@ function populateFilters() {
   }
 
   if (ds) ds.onchange = () => triggerFilter(false);
+  const btnClearDate = document.getElementById('btnClearDateFilter');
+  if (btnClearDate) btnClearDate.onclick = () => {
+    if (ds) ds.value = '';
+    state.filters.date = '';
+    triggerFilter(false);
+  };
   if (ps) ps.onchange = () => triggerFilter(false);
   if (btnApply) btnApply.onclick = () => triggerFilter(false);
 }
@@ -3301,6 +3313,15 @@ function selectMenu(key) {
     const showFilters = !isToday && !isAgencySpending && !isEndAds && !isAdBilling;
     filtersBar.classList.toggle('hidden', !showFilters);
     filtersBar.style.display = showFilters ? 'flex' : 'none';
+  }
+
+  // Date-wise filter (2026-11-02): the Entry Date field shows ONLY in
+  // All Campaign. Other menus keep it hidden so a picked date can never
+  // leak into Today Created / Page Summary / End Ads.
+  const dateField = document.getElementById('campaignDateFilterField');
+  if (dateField) {
+    dateField.classList.toggle('hidden', !isCampaign);
+    dateField.style.display = isCampaign ? '' : 'none';
   }
 
   // Agency Calc Filter Wrap
@@ -3467,7 +3488,10 @@ function selectMenu(key) {
   // dropdown, and the filter bar (with Status/AD/ID/Last End) always
   // renders. The registry build below is local and instant, so nothing
   // is lost by skipping the cache for this one view.
-  if (cached && key !== 'page_summery') {
+  // Date-wise filter (2026-11-02): with a date picked in All Campaign,
+  // skip the month-scoped server cache too — the registry build below
+  // applies the Entry Date filter across all months.
+  if (cached && key !== 'page_summery' && !(key === 'campaign' && state.filters.date)) {
     state._menuJustRenderedKey = key;
     if (cached.stats) renderStats(cached.stats);
     if (key === 'end_ads') {
@@ -3505,8 +3529,13 @@ function selectMenu(key) {
     } else if (key === 'campaign') {
       const mFilter = state.filters.month ? state.filters.month.toLowerCase() : '';
       const yFilter = state.filters.year ? String(state.filters.year) : '';
+      const dFilter = state.filters.date ? String(state.filters.date).trim() : '';
       let filtered = masterList;
-      if (mFilter && mFilter !== 'all' && mFilter !== 'all months') {
+      // Date-wise filter (2026-11-02): a picked date shows that day's
+      // entries (Entry Date) across ALL months, same as the instant path.
+      if (dFilter) {
+        filtered = masterList.filter(r => isSameDay(r['Entry Date'], dFilter));
+      } else if (mFilter && mFilter !== 'all' && mFilter !== 'all months') {
         filtered = masterList.filter(r => {
           const rM = String(r['Month'] || r.month || '').toLowerCase();
           const rY = String(r['Year'] || r.year || '');
