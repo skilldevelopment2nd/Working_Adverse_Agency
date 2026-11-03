@@ -9118,7 +9118,12 @@ async function saveEntry() {
         const rowStart = row.querySelector('.multi-campaign-start')?.value || data.start_date;
         // Per-item Taka (2026-11-03): always this row's own Budget x Rate —
         // never the main row's Taka riding along (the ৳4,900-on-a-$5-row bug).
-        const rowTaka = (budget * rateVal).toFixed(2);
+        // NOTE (2026-11-03 rateVal fix): rateVal is block-scoped inside the
+        // isCampaignMenu block above, so it is NOT visible here — reading it
+        // threw 'rateVal is not defined' on every batch save. data.rate was
+        // assigned in that same block, so it is in scope here.
+        const rowRate = parseFloat(data.rate) || state.rate || 140;
+        const rowTaka = (budget * rowRate).toFixed(2);
         batchItems.push({
           day,
           budget,
