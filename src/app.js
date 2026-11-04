@@ -7495,32 +7495,16 @@ function applyIncreasePaste() {
     return;
   }
   let p = parseIncreasePasteCampaign(text);
-  // Page-name-only paste fallback: if the user pasted just a page name
-  // (no SL/AD, no dates), use that page's latest campaign from the
-  // loaded records, so the same box works for both paste styles.
-  if (!p) {
-    const allRecords = [...(state.rawRecords || []), ...(state.records || []), ...(state.todayCreated || [])];
-    const matches = allRecords.filter(r => String(r['Page Name'] || r.page_name || '').trim().toLowerCase() === text.trim().toLowerCase());
-    matches.sort((a, b) => {
-      const da = parseAnyDate(a['End'] || a['End Date'] || a.end_date || '');
-      const db = parseAnyDate(b['End'] || b['End Date'] || b.end_date || '');
-      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
-    });
-    const latest = matches[0];
-    if (latest) {
-      p = {
-        'Page Name': latest['Page Name'] || latest.page_name || '',
-        'AD Account': latest['AD Account'] || latest.ad_account || '',
-        'ID Name': latest['ID Name'] || latest.id_name || '',
-        'End': latest['End'] || latest['End Date'] || latest.end_date || ''
-      };
-    }
-  }
+  // 2026-11-04, user rule: NO page-name-only fallback. A page can have
+  // multiple campaigns (e.g. Momota Mart 11221 $15 and 11239 $20 both
+  // ending 03-Nov), so auto-picking the "latest" can pick the wrong
+  // one. Only a specific pasted campaign applies; a bare page name
+  // warns below and changes nothing.
   const pageName = p ? (p['Page Name'] || p.page_name || '') : '';
   const endRaw = p ? (p['End'] || p.end_date || '') : '';
   const parsedEnd = endRaw ? parseAnyDate(endRaw) : null;
   if (!p || !pageName || !parsedEnd) {
-    showToast('Paste kora text theke Page Name ba End Date pawa jay nai. Format: SL/AD Page Start End Type Day $Budget, ba shudhu Page Name', 'warning');
+    showToast('Paste kora text theke Page Name ba End Date pawa jay nai. Table theke nirdisto campaign-er puro text paste koro (SL/AD Page Start End Type Day $Budget). Shudhu Page Name likhle Increase bosbe na.', 'warning');
     return;
   }
 
