@@ -3948,12 +3948,15 @@ function executeLoadMenuData(forced = false) {
         }
       });
       state.filteredRecords = [...state.rawRecords];
+      // Search fix (2026-11-05): a refresh must not wipe an active search.
+      const _searchReapplied = applyActiveSearch();
+      const _statRows = _searchReapplied ? state.filteredRecords : state.rawRecords;
       state.headers = CH;
       renderRecordsTable({ headers: CH, rows: state.filteredRecords });
       renderStats({
-        totalRecords: state.rawRecords.length,
-        totalBudget: state.rawRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0),
-        totalTaka: sumBudgetTaka(state.rawRecords).taka
+        totalRecords: _statRows.length,
+        totalBudget: _statRows.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0),
+        totalTaka: sumBudgetTaka(_statRows).taka
       });
       hasActualData = true;
     }
@@ -3994,8 +3997,18 @@ function executeLoadMenuData(forced = false) {
         }
       });
       state.filteredRecords = [...state.rawRecords];
+      // Search fix (2026-11-05): a refresh must not wipe an active search.
+      const _searchReapplied = applyActiveSearch();
       state.headers = cached.records.headers || [];
       renderRecordsTable({ headers: state.headers, rows: state.filteredRecords });
+      if (_searchReapplied) {
+        const _sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+        renderStats({
+          totalRecords: state.filteredRecords.length,
+          totalBudget: _sumBud,
+          totalTaka: sumBudgetTaka(state.filteredRecords).taka
+        });
+      }
       hasActualData = state.rawRecords.length > 0;
     }
 
@@ -4113,6 +4126,9 @@ function executeLoadMenuData(forced = false) {
           }
         }
         state.filteredRecords = [...state.rawRecords];
+        // Search fix (2026-11-05): a background refresh must not wipe an
+        // active search — re-apply the query to the fresh rows.
+        const _searchReapplied = applyActiveSearch();
         state.headers = recs.headers || res.headers || CH;
         // Stable showing + speed (2026-11-01): a background (non-forced)
         // refresh whose rows are identical to what's already on screen must
@@ -4128,7 +4144,14 @@ function executeLoadMenuData(forced = false) {
           return;
         }
         renderRecordsTable({ headers: state.headers, rows: state.filteredRecords });
-        if (res.stats) {
+        if (_searchReapplied) {
+          const _sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+          renderStats({
+            totalRecords: state.filteredRecords.length,
+            totalBudget: _sumBud,
+            totalTaka: sumBudgetTaka(state.filteredRecords).taka
+          });
+        } else if (res.stats) {
           if ((!res.stats.totalRecords || res.stats.totalRecords === 0) && incomingRows.length > 0) {
             res.stats.totalRecords = incomingRows.length;
             res.stats.totalBudget = incomingRows.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
@@ -4273,65 +4296,116 @@ function highlightMatch(text, query) {
 }
 
 let filterRaf = null;
+// Search fix (2026-11-05): search must read the same live rows the table
+// itself shows. When a month is selected, state.rawRecords is only the
+// month-scoped server-cache snapshot, which can lag the live registry — a
+// row entered elsewhere shows in the table via the registry merge but is
+// invisible to search (e.g. Shlrin 11302). So the campaign-view pool is
+// the UNION of the live master registry (view-filtered) and the current
+// snapshot, deduped by display key — search can never see fewer rows than
+// the table itself shows. Other views keep their own rawRecords pool.
+function getSearchPool() {
+  const key = state.currentMenu ? state.currentMenu.key : '';
+  if (key !== 'campaign') return [...(state.rawRecords || [])];
+  const reg = (Array.isArray(state.masterCampaignRegistry) && state.masterCampaignRegistry.length > 0)
+    ? state.masterCampaignRegistry
+    : (Array.isArray(state.campaignRegistry) && state.campaignRegistry.length > 0)
+      ? state.campaignRegistry
+      : [];
+  const dFilter = state.filters && state.filters.date ? String(state.filters.date).trim() : '';
+  const mFilter = state.filters && state.filters.month ? String(state.filters.month).toLowerCase() : '';
+  const yFilter = state.filters && state.filters.year ? String(state.filters.year) : '';
+  const inScope = r => {
+    if (dFilter) return isSameDay(r['Entry Date'], dFilter);
+    if (mFilter && mFilter !== 'all' && mFilter !== 'all months') {
+      const rM = String(r['Month'] || r.month || '').toLowerCase();
+      const rY = String(r['Year'] || r.year || '');
+      const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
+      const dateMonth = dObj ? MONTHS[dObj.getMonth()].toLowerCase() : '';
+      return (rM === mFilter || rM.startsWith(mFilter.slice(0, 3)) || dateMonth === mFilter) && (!yFilter || rY === yFilter);
+    }
+    if (yFilter && yFilter !== 'all' && yFilter !== 'all years') {
+      const rY = String(r['Year'] || r.year || '');
+      const dObj = parseAnyDate(r['Start Date'] || r.Start || r['Date']);
+      return (!yFilter || rY === yFilter || (dObj && String(dObj.getFullYear()) === yFilter));
+    }
+    return true;
+  };
+  return dedupeCampaignRows([...reg.filter(inScope), ...(state.rawRecords || []).filter(inScope)]);
+}
+
+// The list the table should show right now: the view pool, filtered by the
+// active search query (if any) and by the Page Summary New/Old filter.
+function computeFilteredRecords() {
+  const q = (state.searchQuery || '').trim().toLowerCase();
+  const key = state.currentMenu ? state.currentMenu.key : '';
+  const pool = key === 'campaign' ? getSearchPool() : [...(state.rawRecords || [])];
+  let list = q ? pool.filter(row => matchesCampaignRow(row, q)) : [...pool];
+  // Page Summary: the New/Old filter must survive search and search-clear.
+  if (key === 'page_summery') list = applyPageSummaryFilterTo(list);
+  return list;
+}
+
+// Applies a search query (typing path): sets the query, renders the table
+// and the matching stats. Stats always follow the displayed rows.
+function applySearchFilter(query) {
+  const rawQ = (query || '').trim();
+  state.searchQuery = rawQ;
+  const q = rawQ.toLowerCase();
+  const clearBtn = document.getElementById('btnClearTableSearch');
+  if (clearBtn) {
+    if (q) clearBtn.classList.remove('hidden');
+    else clearBtn.classList.add('hidden');
+  }
+  state.filteredRecords = computeFilteredRecords();
+  renderRecordsTable({ headers: state.headers, rows: state.filteredRecords });
+
+  // Dynamically update KPI summary cards for exact search results.
+  // Page Summary cards use their own aggregates (totalAds, new/old
+  // counts) — the campaign-shaped rewrite below would zero them, so
+  // it is skipped in that view; its counter updates via the table.
+  const currentKey = state.currentMenu ? state.currentMenu.key : '';
+  if (currentKey === 'page_summery') {
+    // No stat rewrite here.
+  } else if (q) {
+    const sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+    const sumTak = sumBudgetTaka(state.filteredRecords).taka;
+    renderStats({
+      totalRecords: state.filteredRecords.length,
+      totalBudget: sumBud,
+      totalTaka: sumTak
+    });
+  } else {
+    const src = state.filteredRecords.length > 0 ? state.filteredRecords : (state.rawRecords || []);
+    if (src.length > 0) {
+      const sumBud = src.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
+      const sumTak = sumBudgetTaka(src).taka;
+      renderStats({
+        totalRecords: src.length,
+        totalBudget: sumBud,
+        totalTaka: sumTak
+      });
+    }
+  }
+  return state.filteredRecords;
+}
+
+// Re-applies the active search after rawRecords is rebuilt (background
+// refresh, cache render). Pure state update — the caller renders right
+// after. Returns true when a search was re-applied, so the caller can
+// also render the filtered stats instead of the unfiltered ones.
+function applyActiveSearch() {
+  const q = (state.searchQuery || '').trim();
+  if (!q) return false;
+  const key = state.currentMenu ? state.currentMenu.key : '';
+  if (key !== 'campaign' && key !== 'today_created_campaign') return false;
+  state.filteredRecords = computeFilteredRecords();
+  return true;
+}
+
 function filterTableRows(query) {
   if (filterRaf) cancelAnimationFrame(filterRaf);
-  filterRaf = requestAnimationFrame(() => {
-    const rawQ = (query || '').trim();
-    state.searchQuery = rawQ;
-    const q = rawQ.toLowerCase();
-    const clearBtn = document.getElementById('btnClearTableSearch');
-    if (clearBtn) {
-      if (q) clearBtn.classList.remove('hidden');
-      else clearBtn.classList.add('hidden');
-    }
-
-    const currentKey = state.currentMenu ? state.currentMenu.key : '';
-    const isCampaign = currentKey === 'campaign';
-
-    if (!q) {
-      state.filteredRecords = [...(state.rawRecords || [])];
-    } else {
-      // In 'All Campaign' view, search across the master campaign registry ONLY when All Months is selected
-      let pool = state.rawRecords || [];
-      const isAllMonths = !state.filters?.month || state.filters.month === 'All' || state.filters.month === 'All Months';
-      if (isCampaign && isAllMonths && Array.isArray(state.masterCampaignRegistry) && state.masterCampaignRegistry.length > pool.length) {
-        pool = state.masterCampaignRegistry;
-      }
-
-      state.filteredRecords = pool.filter(row => matchesCampaignRow(row, q));
-    }
-
-    // Page Summary: the New/Old filter must survive search and search-clear.
-    if (currentKey === 'page_summery') {
-      state.filteredRecords = applyPageSummaryFilterTo(state.filteredRecords);
-    }
-
-    renderRecordsTable({ headers: state.headers, rows: state.filteredRecords });
-
-    // Dynamically update KPI summary cards for exact search results.
-    // Page Summary cards use their own aggregates (totalAds, new/old
-    // counts) — the campaign-shaped rewrite below would zero them, so
-    // it is skipped in that view; its counter updates via the table.
-    if (currentKey === 'page_summery') {
-      // No stat rewrite here.
-    } else if (q) {
-      const sumBud = state.filteredRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
-      const sumTak = sumBudgetTaka(state.filteredRecords).taka;
-      renderStats({
-        totalRecords: state.filteredRecords.length,
-        totalBudget: sumBud,
-        totalTaka: sumTak
-      });
-    } else if (state.rawRecords && state.rawRecords.length > 0) {
-      const sumBud = state.rawRecords.reduce((s, r) => s + (parseFloat(String(r['Budget'] || r.budget || '0').replace(/[^0-9.]/g, '')) || 0), 0);
-      const sumTak = sumBudgetTaka(state.rawRecords).taka;
-      renderStats({
-        totalRecords: state.rawRecords.length,
-        totalBudget: sumBud,
-        totalTaka: sumTak
-      });
-    }
-  });
+  filterRaf = requestAnimationFrame(() => applySearchFilter(query));
 }
 
 function clearTableSearch() {
