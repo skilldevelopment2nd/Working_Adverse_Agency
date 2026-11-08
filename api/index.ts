@@ -13,7 +13,13 @@
 //
 // NOTE: `vite` is never imported here. server.ts only imports it inside
 // startServer()'s dev branch, which never runs on Vercel.
-import app from '../server';
+//
+// The import uses the explicit `.js` extension: package.json is
+// `"type": "module"`, so Node's ESM loader requires it — an extensionless
+// `import '../server'` compiles to `/var/task/server` and fails at runtime
+// with ERR_MODULE_NOT_FOUND (seen on the first Vercel deploy, 2026-11-08).
+// TypeScript/tsx resolve `.js` back to the `.ts` source.
+import app from '../server.js';
 
 export default function handler(req: any, res: any): void {
   (app as any)(req, res);
