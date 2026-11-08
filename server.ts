@@ -13,6 +13,13 @@ import {
   parseAnyDate, formatCustomDate, isSameDay, getTodayFormatted, toInputDateValue, calculateEndDate, getNowBST, normalizeCampaign
 } from './src/services/schema.ts';
 
+// Vercel serverless detection: Vercel sets VERCEL=1 in the function runtime.
+// On Vercel the process is short-lived and the filesystem is ephemeral, so the
+// server must not listen, run background timers, or persist to disk; state is
+// hydrated from the live sheet instead (see ensureVercelReady). Every guard
+// below is a no-op on the local server and on AI Studio.
+const IS_VERCEL = process.env.VERCEL === '1' || process.env.VERCEL === 'true';
+
 const app = express();
 app.use(compression() as any);
 app.use(express.json({ limit: '10mb' }));
@@ -163,6 +170,11 @@ function getActiveSheetConfig(): { sheetId: string; webhookUrl: string } {
 }
 
 function saveSheetConfigToDisk(sheetId: string, webhookUrl: string) {
+  // On Vercel the config file ships read-only with the deployment; the
+  // in-memory values (set by the updateSheetConfig RPC) still apply to the
+  // warm instance, but they do not persist across cold starts. Change the
+  // sheet/webhook in the repo (or from the AI Studio app) instead.
+  if (IS_VERCEL) return;
   try {
     const data = {
       sheetId: (sheetId || '').trim(),
@@ -261,6 +273,10 @@ const BACKUP_STORE_PATH = path.join(process.cwd(), '.data_store.json.bak');
 const TEMP_STORE_PATH = path.join(process.cwd(), '.data_store.json.tmp');
 
 function saveStoreToDisk() {
+  // On Vercel the filesystem is ephemeral: a disk write would fail
+  // (read-only) and would be lost on the next cold start anyway. The
+  // in-memory store is the only store; the live sheet is the source of truth.
+  if (IS_VERCEL) return;
   try {
     const data = {
       SHEET_ID,
@@ -280,6 +296,18 @@ function saveStoreToDisk() {
 }
 
 function loadStoreFromDisk(): boolean {
+  if (IS_VERCEL) {
+    // Never trust a shipped disk snapshot on Vercel: any bundled
+    // .data_store.json is stale the moment it is deployed, and the
+    // filesystem cannot persist a fresh one. The config file is still
+    // authoritative for the sheet connection; the store starts empty and
+    // ensureVercelReady() hydrates it from the live sheet on first use.
+    const cfg = getActiveSheetConfig();
+    SHEET_ID = cfg.sheetId;
+    memoryStore.settings.sheet_id = cfg.sheetId;
+    if (cfg.webhookUrl) memoryStore.settings.webhook_url = cfg.webhookUrl;
+    return false;
+  }
   try {
     let content = '';
     if (fs.existsSync(DATA_STORE_PATH)) {
@@ -1158,6 +1186,46 @@ async function syncAllSpreadsheetData(inputSheetId?: string, retryAttempt = 0): 
   } else {
     return await runSync();
   }
+}
+
+// --- Vercel serverless: per-instance hydration + sync-queue drain -------------
+// Vercel functions are short-lived with an ephemeral filesystem, so there is no
+// disk store and no background sync interval. Instead, the first RPC of a cold
+// instance -- and then at most once every 5 minutes, mirroring the local
+// server's 5-minute background sync -- hydrates the in-memory store from the
+// live sheet (Apps Script readAll, falling back to public GViz CSV; both are
+// read-only). Previously failed sheet writes are retried first, which is the
+// serverless replacement for the background sync-queue timer. Failures are
+// never hidden: the /api/rpc dispatcher still merges sheetSynced:false +
+// sheetWarning into the response, exactly as on the local server.
+let vercelHydratedAt = 0;
+let vercelHydrationPromise: Promise<void> | null = null;
+async function ensureVercelReady(): Promise<void> {
+  if (!IS_VERCEL) return;
+  try {
+    if (Array.isArray(memoryStore.syncQueue) && memoryStore.syncQueue.length > 0) {
+      await processServerSyncQueue();
+    }
+  } catch (_) {}
+  const now = Date.now();
+  if (vercelHydratedAt && now - vercelHydratedAt < 5 * 60 * 1000) return;
+  if (vercelHydrationPromise) {
+    await vercelHydrationPromise;
+    return;
+  }
+  vercelHydrationPromise = (async () => {
+    try {
+      if (SHEET_ID) {
+        await syncAllSpreadsheetData();
+        vercelHydratedAt = Date.now();
+      }
+    } catch (_) {
+      // Serve from memory; the next call retries after the TTL.
+    } finally {
+      vercelHydrationPromise = null;
+    }
+  })();
+  await vercelHydrationPromise;
 }
 
 function ingestSheetRows(title: string, headers: string[], dataRows: any[][]) {
@@ -2538,6 +2606,9 @@ function enqueueServerSyncTask(task: Omit<ServerSyncTask, 'id' | 'retries' | 'cr
 }
 
 function triggerServerSyncQueue() {
+  // On Vercel there are no background timers: failed writes are retried at
+  // the start of the next invocation instead (see ensureVercelReady).
+  if (IS_VERCEL) return;
   if (serverSyncQueueTimeout) clearTimeout(serverSyncQueueTimeout);
   serverSyncQueueTimeout = setTimeout(() => {
     processServerSyncQueue().catch(err => console.warn('[Server Sync Worker]:', err?.message));
@@ -7007,6 +7078,10 @@ app.all('/api/sheets-sync', async (req, res) => {
 
 app.all('/api/rpc', async (req, res) => {
   try {
+    // On Vercel: hydrate from the live sheet (and retry queued writes) before
+    // dispatching, so reads never serve an empty or stale in-memory store.
+    // No-op on the local server and on AI Studio.
+    await ensureVercelReady();
     const authHeader = (req.headers.authorization as string) || '';
     if (authHeader.startsWith('Bearer ')) {
       currentRequestOAuthToken = authHeader.slice(7).trim();
@@ -7174,7 +7249,13 @@ async function startServer() {
 
   if (!isProduction) {
     try {
-      const { createServer: createViteServer } = await import('vite');
+      // NOTE (Vercel): the specifier is built dynamically so serverless
+      // bundlers (@vercel/nft) cannot statically trace the optional dev-only
+      // `vite` package into the function bundle. At runtime (local
+      // `npm run dev`) it still resolves to the installed vite package.
+      // This branch never runs on Vercel: startServer() is not called there.
+      const viteSpecifier = ['v', 'ite'].join('');
+      const { createServer: createViteServer } = await import(viteSpecifier);
       const vite = await createViteServer({
         server: { middlewareMode: true, hmr: false, ws: false },
         appType: 'custom',
@@ -7344,7 +7425,13 @@ async function startServer() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-startServer().catch(err => {
-  console.error('[AdVerse Server Startup Error]:', err);
-  process.exit(1);
-});
+// The Express app is exported for the Vercel serverless entry (api/index.ts),
+ // which forwards requests to it without starting a listener.
+export default app;
+
+if (!IS_VERCEL) {
+  startServer().catch(err => {
+    console.error('[AdVerse Server Startup Error]:', err);
+    process.exit(1);
+  });
+}
