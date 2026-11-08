@@ -343,15 +343,16 @@ export function formatMonthSL(slInput: any, monthName?: string, year?: string | 
   const mIdx = MONTHS.findIndex(m => m.toLowerCase() === String(targetMonth).toLowerCase());
   const monthNum = mIdx >= 0 ? mIdx + 1 : 10;
   const monthPrefix = String(monthNum).padStart(2, '0');
+  const monthPrefix1 = String(monthNum); // 1-digit form: September sheet SLs use '9183', not '09183'
 
-  if (raw.length >= 4 && raw.startsWith(monthPrefix)) {
+  if (raw.length >= 4 && (raw.startsWith(monthPrefix) || (monthNum < 10 && raw.startsWith(monthPrefix1)))) {
     return raw;
   }
 
   const numOnly = parseInt(raw.replace(/\D/g, ''), 10);
   if (isNaN(numOnly)) return raw;
 
-  if (numOnly >= 1000 && String(numOnly).startsWith(monthPrefix)) {
+  if (numOnly >= 1000 && (String(numOnly).startsWith(monthPrefix) || (monthNum < 10 && String(numOnly).startsWith(monthPrefix1)))) {
     return String(numOnly);
   }
 
