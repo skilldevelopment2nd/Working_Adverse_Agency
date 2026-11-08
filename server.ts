@@ -11,7 +11,11 @@ import {
   AGENCY_SPENDING_HEADERS, MONTHLY_CLOSING_HEADERS, AGENCY_COST_HEADERS, END_ADS_HEADERS, AD_ACCOUNT_BILLING_HEADERS,
   ALL_DATE_HEADERS, isDateHeader, normalizeRowDates,
   parseAnyDate, formatCustomDate, isSameDay, getTodayFormatted, toInputDateValue, calculateEndDate, getNowBST, normalizeCampaign
-} from './src/services/schema.ts';
+} from './src/services/schema.js'; // NOTE: `.js` (not `.ts`) — package.json is
+// "type": "module", so Node's ESM loader needs the extension; Vercel's
+// function runtime failed with ERR_MODULE_NOT_FOUND on the `.ts` specifier
+// (2026-11-08). tsc (moduleResolution: bundler) and tsx both resolve `.js`
+// back to the `.ts` source, so local dev and AI Studio are unaffected.
 
 // Vercel serverless detection: Vercel sets VERCEL=1 in the function runtime.
 // On Vercel the process is short-lived and the filesystem is ephemeral, so the
