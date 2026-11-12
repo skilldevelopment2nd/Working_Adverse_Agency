@@ -1265,16 +1265,31 @@ function ingestSheetRows(title: string, headers: string[], dataRows: any[][]) {
         'Year': String(year)
       };
     });
-    // Non-destructive merge: preserve any local payments not yet in Google Sheet
+    // Non-destructive merge: preserve any local payments not yet in Google Sheet.
+    // Count-based (multiset) merge — 2026-11-12 fix: two genuinely identical
+    // payments (same date, method and amount, e.g. 11-Nov Merchant ৳30,000 x2)
+    // must both survive. The old content check treated the second identical
+    // local row as already present once the first had been merged, so every
+    // sync collapsed it to one and the app showed paid ৳30,000 short.
+    // Final count per identical content = max(remote count, local count),
+    // so repeated syncs stay stable and never accumulate duplicates.
+    const paymentContentKey = (p: any) => [
+      String(p['Date'] || '').trim(),
+      String(p['Payment Method'] || '').trim(),
+      String(Number(p['Paid (৳)'] || 0)),
+      String(p['Month'] || '').trim(),
+      String(p['Year'] || '').trim()
+    ].join('|');
     const mergedPayments = [...remotePayments];
+    const localSeen = new Map<string, number>();
     (memoryStore.payments || []).forEach(localP => {
       const recId = String(localP['Record ID'] || localP._recordId || '').trim();
-      const isPresent = mergedPayments.some(sp => {
-        const spRecId = String(sp['Record ID'] || sp._recordId || '').trim();
-        if (recId && spRecId && recId === spRecId) return true;
-        return sp['Date'] === localP['Date'] && Number(sp['Paid (৳)']) === Number(localP['Paid (৳)']) && sp['Payment Method'] === localP['Payment Method'];
-      });
-      if (!isPresent) mergedPayments.push(localP);
+      if (recId && mergedPayments.some(sp => String(sp['Record ID'] || sp._recordId || '').trim() === recId)) return;
+      const key = paymentContentKey(localP);
+      const seenSoFar = (localSeen.get(key) || 0) + 1;
+      localSeen.set(key, seenSoFar);
+      const alreadyMerged = mergedPayments.filter(sp => paymentContentKey(sp) === key).length;
+      if (alreadyMerged < seenSoFar) mergedPayments.push(localP);
     });
     memoryStore.payments = mergedPayments;
     return;
