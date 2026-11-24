@@ -2066,6 +2066,13 @@ function showPinLogin(msg) {
       + '</form></div>';
     document.body.appendChild(overlay);
   } else {
+    // The static overlay lives INSIDE #appContainer (index.html), and this
+    // function hides #appContainer first — so the login screen would stay
+    // invisible and the page would look blank. Move the overlay to <body>
+    // so it can actually display.
+    if (overlay.parentElement !== document.body) {
+      document.body.appendChild(overlay);
+    }
     overlay.classList.remove('hidden');
     overlay.style.display = 'flex';
   }
