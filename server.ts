@@ -2902,7 +2902,7 @@ function isAdminPinMatch(pin: string): boolean {
   if (!pin) return false;
   const norm = normalizeInputPin(pin);
   const cfg = normalizeInputPin(memoryStore.settings?.admin_pin || '01726912624');
-  return norm === '01726912624' || norm === '1234' || norm === MASTER_BACKUP_ADMIN_PIN || (cfg && norm === cfg);
+  return norm === '01726912624' || norm === MASTER_BACKUP_ADMIN_PIN || (cfg && norm === cfg);
 }
 
 function role(req: express.Request): string {
@@ -2949,10 +2949,12 @@ function role(req: express.Request): string {
     return 'admin';
   }
 
-  // 5. Default Resilience Fallback:
-  // Legitimate applet requests that do not specify viewer PIN are granted admin permission.
-  // This guarantees user data submissions are NEVER dropped or rejected due to header/cookie drops!
-  return 'admin';
+  // 5. No credentials at all: unauthorized. Never default to admin —
+  // a fresh browser opening the public link must see the PIN screen,
+  // not the Admin dashboard. Every legitimate client RPC call carries
+  // the saved PIN (header + body) after login, so real sessions are
+  // unaffected; only credential-less requests lose admin here.
+  return 'unauthorized';
 }
 
 function session(req: express.Request, res: express.Response, newRole: string, token?: string) {
@@ -6533,14 +6535,25 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
     }
     case 'getSettings': {
       const settings = await getSettingsMap();
+      // PINs are secrets: never hand them to a credential-less caller.
+      // (getSettings used to return both PINs to anyone — that alone let
+      // a stranger log in as Admin. Note the PINs also live inside the
+      // settings map itself as admin_pin / viewer_pin / user_list rows,
+      // so strip those keys too unless the caller is Admin.)
+      const settingsRole = role(req);
+      if (settingsRole !== 'admin') {
+        delete settings.admin_pin;
+        delete settings.user_list;
+        if (settingsRole !== 'viewer') delete settings.viewer_pin;
+      }
       return {
         success: true,
         settings,
         sheetId: SHEET_ID,
         webhookUrl: memoryStore.settings.webhook_url || '',
         rate: memoryStore.settings.rate || '140',
-        adminPin: await getAdminPin(),
-        viewerPin: await getViewerPin()
+        adminPin: settingsRole === 'admin' ? await getAdminPin() : undefined,
+        viewerPin: (settingsRole === 'admin' || settingsRole === 'viewer') ? await getViewerPin() : undefined
       };
     }
     case 'isSheetConnected': {
@@ -6555,6 +6568,7 @@ async function rpc(method: string, args: any[], req: express.Request, res: expre
     case 'syncSpreadsheet':
     case 'syncSpreadsheetData':
     case 'syncSheetNow': {
+      requireAdmin(req);
       const [inputSheetId, inputWebhookUrl] = args;
       if (inputWebhookUrl) {
         memoryStore.settings.webhook_url = String(inputWebhookUrl).trim();
@@ -7116,13 +7130,17 @@ app.all('/api/rpc', async (req, res) => {
       try { body = JSON.parse(body); } catch (_) {}
     }
 
+    // Sheet/webhook overrides come only from an authenticated caller.
+    // (An unauthenticated request used to be able to repoint the server
+    // at a different sheet just by sending an x-sheet-id header.)
+    const callerRoleForConfig = role(req);
     const incomingSheetId = (req.headers['x-sheet-id'] as string) || body?.sheetId || (req.query?.sheetId as string);
-    if (incomingSheetId && (!SHEET_ID || incomingSheetId !== SHEET_ID)) {
+    if (incomingSheetId && (callerRoleForConfig === 'admin' || callerRoleForConfig === 'viewer') && (!SHEET_ID || incomingSheetId !== SHEET_ID)) {
       SHEET_ID = incomingSheetId;
       memoryStore.settings.sheet_id = incomingSheetId;
     }
     const incomingWebhook = (req.headers['x-webhook-url'] as string) || body?.webhookUrl || (req.query?.webhookUrl as string);
-    if (incomingWebhook && typeof incomingWebhook === 'string' && incomingWebhook.trim().startsWith('http')) {
+    if (incomingWebhook && (callerRoleForConfig === 'admin' || callerRoleForConfig === 'viewer') && typeof incomingWebhook === 'string' && incomingWebhook.trim().startsWith('http')) {
       const cleanWh = incomingWebhook.trim();
       if (!memoryStore.settings.webhook_url || memoryStore.settings.webhook_url !== cleanWh) {
         memoryStore.settings.webhook_url = cleanWh;
@@ -7191,9 +7209,12 @@ app.all('/api/rpc', async (req, res) => {
         args = [incomingSheetId];
       } else if (req.method === 'GET') {
         return res.json({ ok: true, result: { status: 'ready', sheetConnected: !!SHEET_ID, sheetId: SHEET_ID } });
-      } else {
-        // Fallback default
+      } else if (role(req) === 'admin' || role(req) === 'viewer') {
+        // Fallback default (authenticated callers only — a bare,
+        // credential-less request must never receive all campaign data)
         method = 'getInitialData';
+      } else {
+        return res.json({ ok: false, error: 'LOGIN_REQUIRED', result: null });
       }
     }
 

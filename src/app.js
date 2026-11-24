@@ -2574,13 +2574,13 @@ function initializeApp() {
   }
 
   if (!savedPin) {
-    // Default seamless access on first launch or fresh browser
-    savedPin = '01726912624';
-    savedRole = 'admin';
-    try {
-      localStorage.setItem('adverse_saved_pin', '01726912624');
-      localStorage.setItem('adverse_user_role', 'admin');
-    } catch (_) {}
+    // No saved session: PIN is required. Never auto-fill the admin PIN —
+    // a fresh browser opening the public link must see the PIN screen,
+    // not the Admin dashboard. (A saved PIN from an earlier login on this
+    // same device still unlocks automatically below.)
+    state.userRole = 'unauthorized';
+    showPinLogin('Please enter your PIN to access the dashboard.');
+    return;
   }
 
   // Saved PIN exists: Unlock immediately and load cached view with ZERO delay
@@ -2608,11 +2608,6 @@ function loadAppData(retryCount = 0) {
     state.rate = data.rate || 140;
 
     let savedPin = (localStorage.getItem('adverse_saved_pin') || '').trim();
-    if (!savedPin && localStorage.getItem('adverse_logged_out') !== 'true') {
-      savedPin = '01726912624';
-      localStorage.setItem('adverse_saved_pin', '01726912624');
-      localStorage.setItem('adverse_user_role', 'admin');
-    }
     if (savedPin === '01893231534') {
       state.userRole = 'viewer';
     } else if (savedPin === '01726912624' || data.userRole === 'admin') {
@@ -2620,7 +2615,8 @@ function loadAppData(retryCount = 0) {
     } else if (data.userRole && data.userRole !== 'unauthorized') {
       state.userRole = data.userRole;
     } else {
-      state.userRole = 'admin';
+      // Never default to admin when no valid PIN/session exists.
+      state.userRole = 'unauthorized';
     }
     state.displayName = (state.userRole === 'admin') ? 'Admin' : 'Viewer';
     localStorage.setItem('adverse_user_role', state.userRole);
